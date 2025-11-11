@@ -152,7 +152,7 @@ class ImageAnnotator:
         color: Tuple[int, int, int]
     ) -> None:
         """
-        Dessine le contour d'une zone sur l'image.
+        Dessine le contour d'une zone avec transparence.
         
         Args:
             image: Image numpy array (modifiée in-place)
@@ -167,8 +167,15 @@ class ImageAnnotator:
         # Convertir en numpy array
         points = np.array(coords, dtype=np.int32)
         
-        # Dessiner le polygone
-        cv2.polylines(image, [points], isClosed=True, color=color, thickness=3)
+        # Créer overlay pour transparence du contour
+        overlay = image.copy()
+        
+        # Dessiner le contour sur l'overlay
+        cv2.polylines(overlay, [points], isClosed=True, color=color, thickness=3)
+        
+        # Fusionner avec 50% de transparence
+        alpha = 0.8
+        cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0, image)
         
         # Ajouter le nom de la zone
         if len(coords) > 0:
@@ -221,8 +228,8 @@ class ImageAnnotator:
         """
         x, y = position
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.6
-        thickness = 2
+        font_scale = 1.0  # Augmenté de 0.6 à 1.0 pour meilleure lisibilité
+        thickness = 3     # Augmenté de 2 à 3 pour meilleure visibilité
         
         # Calculer la taille du texte
         (text_width, text_height), baseline = cv2.getTextSize(

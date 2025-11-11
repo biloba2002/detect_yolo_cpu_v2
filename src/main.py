@@ -75,7 +75,7 @@ def process_image(
             extra={"camera": camera_name, "total": counters["total"], "false": counters["false"], "by_class": counters["by_class"]},
         )
 
-        # 2) Annotation — composite unique avec zones
+        # 2) Annotation – composite unique avec zones
         annotator = ImageAnnotator(camera_config)
         from cv2 import imread
         img = imread(str(image_path))
@@ -86,7 +86,7 @@ def process_image(
 
         # Répertoire de sortie
         output_dir = Path(config.directories.output)
-        timestamp = image_path.stem.split("_", 1)[1] if "_" in image_path.stem else "unknown"
+        original_filename = image_path.name  # Conserve le nom original complet
         is_valid = (counters["total"] - counters["false"]) > 0
         result_dir = "true" if is_valid else "false"
         if config.processing.output_structure.organize_by_result:
@@ -95,7 +95,7 @@ def process_image(
             dest_dir = (output_dir / camera_name) if config.processing.output_structure.organize_by_camera else output_dir
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        composite_path = dest_dir / f"composite_{timestamp}.jpg"
+        composite_path = dest_dir / original_filename  # Utilise le nom original
         annotator.annotate_composite(str(image_path), str(composite_path), detections, zone_manager)
         logger.info("Image composite créée", extra={"path": str(composite_path)})
 
