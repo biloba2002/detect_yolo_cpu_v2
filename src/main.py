@@ -1,7 +1,11 @@
 """
 Point d'entrée principal de l'application detect_yolo_cpu_v2.
-Orchestre tous les modules : configuration, détection, annotation, MQTT, etc.
+Orchestre configuration, détection, annotation, MQTT.
 """
+
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["ULTRALYTICS_FORCE_CPU"] = "1"
 
 import signal
 import sys
@@ -25,50 +29,21 @@ mqtt_client: Optional[MQTTPublisher] = None
 
 
 def signal_handler(signum, frame):
-    """
-    Gère les signaux de terminaison (SIGTERM, SIGINT).
-
-    Args:
-        signum: Numéro du signal
-        frame: Frame courante
-    """
     global watcher, mqtt_client
-
-    logger.info(
-        "Signal de terminaison reçu, arrêt de l'application",
-        extra={"signal": signum},
-    )
-
-    # Arrêter le file watcher
+    logger.info("Signal de terminaison reçu, arrêt de l'application", extra={"signal": signum})
     if watcher and watcher.is_running():
         logger.info("Arrêt du FileWatcher...")
         watcher.stop()
-
-    # Déconnexion MQTT
     if mqtt_client:
         logger.info("Déconnexion MQTT...")
         mqtt_client.disconnect()
-
     logger.info("Application arrêtée proprement")
     sys.exit(0)
 
 
 def extract_camera_name(filename: str) -> str:
-    """
-    Extrait le nom de la caméra depuis le nom du fichier.
-    Format attendu : {camera}_{timestamp}.jpg
-
-    Args:
-        filename: Nom du fichier
-
-    Returns:
-        Nom de la caméra (ou 'generique' si non trouvé)
-    """
-    # Format: camera_2025-11-10_10-30-15.jpg
     parts = filename.split("_")
-    if len(parts) >= 2:
-        return parts[0]
-    return "generique"
+    return parts[0] if len(parts) >= 2 else "generique"
 
 
 def process_image(
@@ -78,285 +53,182 @@ def process_image(
     mqtt_client: MQTTPublisher,
     message_builder: MessageBuilder,
 ) -> None:
-    """
-    Traite une image : détection, annotation, messages, publication MQTT.
-
-    Args:
-        image_path: Chemin de l'image
-        config: Configuration globale
-        detector: Instance du détecteur
-        mqtt_client: Client MQTT
-        message_builder: Constructeur de messages
-    """
     try:
-        # Extraire le nom de la caméra
         camera_name = extract_camera_name(image_path.name)
 
-        logger.info(
-            "Traitement image démarré",
-            extra={
-                "file": str(image_path),
-                "camera": camera_name,
-            },
-        )
+        logger.info("Traitement image démarré", extra={"file": str(image_path), "camera": camera_name})
 
-        # Trouver la config de la caméra
-        camera_config = None
-        for cam in config.cameras:
-            if cam.name == camera_name:
-                camera_config = cam
-                break
-
-        # Fallback sur caméra générique si non trouvée
+        # Config caméra ou fallback "generique"
+        camera_config = next((c for c in config.cameras if c.name == camera_name), None)
         if camera_config is None:
-            logger.warning(
-                "Caméra non trouvée dans config, utilisation de 'generique'",
-                extra={"camera_requested": camera_name},
-            )
-            for cam in config.cameras:
-                if cam.name == "generique":
-                    camera_config = cam
-                    camera_name = "generique"
-                    break
-
+            logger.warning("Caméra non trouvée, utilisation de 'generique'", extra={"camera_requested": camera_name})
+            camera_config = next((c for c in config.cameras if c.name == "generique"), None)
+            camera_name = "generique" if camera_config else camera_name
         if camera_config is None:
             logger.error("Aucune caméra 'generique' dans la config, abandon")
             return
 
-        # 1. DÉTECTION YOLO + ZONES
+        # 1) Détection
         detections, counters = detector.detect(str(image_path), camera_config)
-
         logger.info(
             "Détection terminée",
-            extra={
-                "camera": camera_name,
-                "total": counters["total"],
-                "false": counters["false"],
-                "by_class": counters["by_class"],
-            },
+            extra={"camera": camera_name, "total": counters["total"], "false": counters["false"], "by_class": counters["by_class"]},
         )
 
-        # 2. ANNOTATION IMAGES
+        # 2) Annotation — composite unique avec zones
         annotator = ImageAnnotator(camera_config)
+        from cv2 import imread
+        img = imread(str(image_path))
+        if img is None:
+            raise RuntimeError(f"Impossible de lire l'image: {image_path}")
+        image_h, image_w = img.shape[:2]
+        zone_manager = ZoneManager(camera_config.zones, image_w, image_h) if camera_config.zones else None
+
+        # Répertoire de sortie
         output_dir = Path(config.directories.output)
-        
-        # Charger l'image pour obtenir ses dimensions (nécessaire pour ZoneManager)
-        import cv2
-        img = cv2.imread(str(image_path))
-        image_height, image_width = img.shape[:2]
-
-        # Créer les noms de fichiers de sortie
         timestamp = image_path.stem.split("_", 1)[1] if "_" in image_path.stem else "unknown"
-        is_valid = counters["total"] - counters["false"] > 0
-
-        # Déterminer le dossier de destination
+        is_valid = (counters["total"] - counters["false"]) > 0
         result_dir = "true" if is_valid else "false"
         if config.processing.output_structure.organize_by_result:
-            if config.processing.output_structure.organize_by_camera:
-                dest_dir = output_dir / result_dir / camera_name
-            else:
-                dest_dir = output_dir / result_dir
+            dest_dir = (output_dir / result_dir / camera_name) if config.processing.output_structure.organize_by_camera else (output_dir / result_dir)
         else:
-            if config.processing.output_structure.organize_by_camera:
-                dest_dir = output_dir / camera_name
-            else:
-                dest_dir = output_dir
-
+            dest_dir = (output_dir / camera_name) if config.processing.output_structure.organize_by_camera else output_dir
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        # Image composite
         composite_path = dest_dir / f"composite_{timestamp}.jpg"
-        annotator.annotate_composite(str(image_path), str(composite_path), detections)
+        annotator.annotate_composite(str(image_path), str(composite_path), detections, zone_manager)
+        logger.info("Image composite créée", extra={"path": str(composite_path)})
 
-        logger.info(
-            "Image composite créée",
-            extra={"path": str(composite_path)},
-        )
+        # 3) NOTIFICATIONS
+        # Map: zone_name -> liste de détections VALIDE (is_false=False) appartenant à la zone
+        zone_detections_map = {}
+        for d in detections:
+            if d.get("is_false"):
+                continue
+            for zname in d.get("zones", []):
+                zone_detections_map.setdefault(zname, []).append(d)
 
-        # Images par zone
-        zone_images = {}
-        if camera_config.zones:
-            zone_manager = ZoneManager(camera_config.zones, image_width, image_height)
-        
-        for zone in camera_config.zones:
-            zone_path = dest_dir / f"zone_{zone.name}_{timestamp}.jpg"
-            zone_detections = [d for d in detections if zone.name in d.get("zones", [])]
+        # Zones qui ont au moins une détection valide
+        zones_with_dets = [z for z in camera_config.zones if zone_detections_map.get(z.name)]
+        # Au moins une zone autorise une notif ?
+        has_zone_notify = any((z.text_msg or z.audio_msg) for z in zones_with_dets)
 
-            if annotator.annotate_zone(
-                str(image_path), str(zone_path), zone.name, zone_detections, zone_manager
-            ):
-                zone_images[zone.name] = str(zone_path)
-                logger.info(
-                    "Image zone créée",
-                    extra={
-                        "zone": zone.name,
-                        "path": str(zone_path),
-                        "detections": len(zone_detections),
-                    },
-                )
+        # 3.1 Notifications ZONE (uniquement celles autorisées)
+        for z in zones_with_dets:
+            if z.text_msg or z.audio_msg:
+                z_dets = zone_detections_map.get(z.name, [])
+                zone_msg = message_builder.build_zone_message(z, counters, z_dets)
+                if zone_msg and z.text_msg:
+                    mqtt_client.publish_notification(
+                        camera_name, z.name, zone_msg["message"], zone_msg.get("audio", False)
+                    )
 
-        # 3. CONSTRUCTION MESSAGES
-        # Message caméra global
-        if camera_config.text_msg or camera_config.entity_ha:
+        # 3.2 Notification CAMÉRA
+        # Règle: aucune notif caméra si des zones ont des détections mais qu'aucune n'autorise message/audio
+        send_camera_msg = False
+        if not camera_config.zones:
+            send_camera_msg = True
+        elif zones_with_dets and has_zone_notify:
+            send_camera_msg = False
+        elif zones_with_dets and not has_zone_notify:
+            send_camera_msg = False
+        else:
+            send_camera_msg = False
+
+        if send_camera_msg and camera_config.text_msg:
             camera_msg = message_builder.build_camera_message(camera_config, counters)
-
-            if camera_msg and camera_config.text_msg:
-                # Publier notification caméra
+            if camera_msg:
                 mqtt_client.publish_notification(
                     camera_name, None, camera_msg["message"], camera_msg.get("audio", False)
                 )
 
-        # Messages par zone
-        for zone in camera_config.zones:
-            if zone.text_msg or zone.entity_ha:
-                # Récupérer les détections pour cette zone spécifique
-                zone_detections = counters.get("by_zone", {}).get(zone.name, {})
-                zone_msg = message_builder.build_zone_message(zone, counters, zone_detections)
-                    
-
-                if zone_msg and zone.text_msg:
-                    # Publier notification zone
-                    mqtt_client.publish_notification(
-                        camera_name, zone.name, zone_msg["message"], zone_msg.get("audio", False)
-                    )
-
-        # 4. PUBLICATION MQTT SENSORS
+        # 4) Capteurs MQTT
         if camera_config.entity_ha:
-            # Sensor détections totales
-            mqtt_client.publish_sensor(
-                camera_name, "detections", counters["total"] - counters["false"]
-            )
-
-            # Sensor fausses détections
+            if camera_config.zones:
+                det_sum = sum(v.get("total", 0) for v in counters.get("by_zone", {}).values())
+            else:
+                det_sum = counters["total"] - counters["false"]
+            mqtt_client.publish_sensor(camera_name, "detections", det_sum)
             mqtt_client.publish_sensor(camera_name, "false_detections", counters["false"])
 
-            # Sensors par zone et par classe
-            for zone_name, zone_counters in counters.get("by_zone", {}).items():
-                for obj_class, count in zone_counters.items():
-                    mqtt_client.publish_sensor(
-                        camera_name, f"zone_{zone_name}_{obj_class}", count
-                    )
+            # Publie les compteurs par zone
+            for zone_key, zc in counters.get("by_zone", {}).items():
+                zname = zone_key.split("zone_", 1)[1] if zone_key.startswith("zone_") else zone_key
+                mqtt_client.publish_sensor(camera_name, f"zone_zone_{zname}_total", zc.get("total", 0))
+                mqtt_client.publish_sensor(camera_name, f"zone_zone_{zname}_by_class", zc.get("by_class", {}))
 
-        # 5. PUBLICATION IMAGE METADATA
-   #    mqtt_client.publish_image(camera_name, str(composite_path))
-
-        # 6. GESTION FICHIER SOURCE
+        # 5) Post-traitement de la source
         handle_processed_image(
-    str(image_path), 
-    config.processing.input_action,
-    str(config.directories.output)
-)
+            str(image_path),
+            config.processing.input_action,
+            str(config.directories.output),
+            save_original=bool(config.processing.output_structure.save_original),
+            original_by_camera=bool(config.processing.output_structure.original_by_camera),
+            camera=camera_name,
+        )
 
         logger.info(
             "Traitement image terminé avec succès",
             extra={
                 "file": str(image_path),
                 "camera": camera_name,
-                "detections": counters["total"] - counters["false"],
+                "detections": det_sum if camera_config.zones else (counters["total"] - counters["false"]),
             },
         )
 
     except Exception as e:
-        logger.error(
-            "Erreur lors du traitement de l'image",
-            extra={
-                "file": str(image_path),
-                "error": str(e),
-            },
-            exc_info=True,
-        )
+        logger.error("Erreur lors du traitement de l'image", extra={"file": str(image_path), "error": str(e)}, exc_info=True)
 
 
 def main():
-    """Fonction principale de l'application."""
     global logger, watcher, mqtt_client
-
-    # 1. CHARGEMENT CONFIGURATION
     try:
         config = load_config("config/config.yaml")
     except Exception as e:
         print(f"❌ Erreur chargement configuration : {e}")
         sys.exit(1)
 
-    # 2. CONFIGURATION LOGGER
     logger = setup_logger(config.logging.level, config.logging.format)
-    logger.info(
-        "Application démarrée",
-        extra={
-            "app": config.app.name,
-            "version": config.app.version,
-        },
-    )
+    logger.info("Application démarrée", extra={"app": config.app.name, "version": config.app.version})
 
-    # 3. VÉRIFICATION RÉPERTOIRES
     input_dir = Path(config.directories.input)
     output_dir = Path(config.directories.output)
-
     input_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Répertoires configurés", extra={"input": str(input_dir), "output": str(output_dir)})
 
-    logger.info(
-        "Répertoires configurés",
-        extra={
-            "input": str(input_dir),
-            "output": str(output_dir),
-        },
-    )
-
-    # 4. INITIALISATION MQTT
     try:
         mqtt_client = MQTTPublisher(config)
         mqtt_client.connect()
-        
-        # Note: L'autodiscovery Home Assistant se fera automatiquement
-        # lors de la première publication de chaque sensor
-        
         logger.info("Connexion MQTT établie")
-
     except Exception as e:
         logger.error(f"Erreur connexion MQTT : {e}", exc_info=True)
         sys.exit(1)
 
-    # 5. INITIALISATION DÉTECTEUR YOLO
     try:
-        detector = Detector(
-            config.detection.model, confidence_threshold=config.detection.confidence_threshold
-        )
-        logger.info(
-            "Détecteur YOLO initialisé",
-            extra={"model": config.detection.model},
-        )
+        detector = Detector(config.detection.model, confidence_threshold=config.detection.confidence_threshold)
+        logger.info("Détecteur YOLO initialisé", extra={"model": config.detection.model})
     except Exception as e:
         logger.error(f"Erreur initialisation détecteur : {e}", exc_info=True)
         mqtt_client.disconnect()
         sys.exit(1)
 
-    # 6. INITIALISATION MESSAGE BUILDER
     message_builder = MessageBuilder()
 
-    # 7. CONFIGURATION GESTION SIGNAUX
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
-    # 8. CRÉATION FILE WATCHER
     def on_new_file(file_path: Path):
-        """Callback appelé lors de la détection d'un nouveau fichier."""
         process_image(file_path, config, detector, mqtt_client, message_builder)
 
     watcher = FileWatcher(input_dir, callback=on_new_file, extensions=(".jpg", ".jpeg"))
 
-    # 9. TRAITEMENT FICHIERS EXISTANTS (optionnel)
     logger.info("Traitement des fichiers existants dans shared_in...")
     watcher.process_existing_files()
 
-    # 10. DÉMARRAGE SURVEILLANCE
     watcher.start()
-    logger.info(
-        "Surveillance active, en attente de nouveaux fichiers...",
-        extra={"directory": str(input_dir)},
-    )
+    logger.info("Surveillance active, en attente de nouveaux fichiers...", extra={"directory": str(input_dir)})
 
-    # 11. BOUCLE PRINCIPALE
     try:
         while True:
             time.sleep(1)

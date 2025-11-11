@@ -27,7 +27,7 @@ homeassistant:
   discovery_prefix: "homeassistant"
 
 detection:
-  model: yolo11n.pt
+  model: yolo11s.pt
   confidence_threshold: 0.5
 
 cameras:
@@ -67,7 +67,7 @@ cameras:
         entity_ha: true
         text_msg: true
         audio_msg: true
-        msg_template: "{count_person} personne(s) et {count_car} voiture(s) détecté(es) sur la route"
+        msg_template: ""
 
       - name: cour
         polygon:
@@ -96,9 +96,25 @@ cameras:
         entity_ha: true
         text_msg: true
         audio_msg: true
-        msg_template: "{count_person} personne(s) et {count_dog} chien(s) dans la cour"
+        msg_template: ""
 
   - name: ptz
+    detect:
+      - person
+      - cat
+      - dog
+      - car
+      - motorcycle
+      - truck
+      - bird
+      - bicycle
+    text_msg: true
+    audio_msg: true
+    show_object: true
+    entity_ha: true
+    zones: []
+
+  - name: terrasse
     detect:
       - person
       - cat
