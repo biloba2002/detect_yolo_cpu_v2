@@ -1,52 +1,68 @@
 """
-Configuration du système de logging structuré avec structlog.
+Configuration du système de logging avec structlog.
+Fournit des logs structurés au format JSON.
 """
 
 import logging
 import sys
-from typing import Any, Dict
 
 import structlog
 
 
-def setup_logging(level: str = "info", log_format: str = "json") -> None:
+def setup_logger(level: str = "info", format: str = "json") -> structlog.BoundLogger:
     """
-    Configure le système de logging structuré.
-    
+    Configure le système de logging avec structlog.
+
     Args:
         level: Niveau de log (debug, info, warning, error)
-        log_format: Format de sortie (json ou console)
+        format: Format des logs (json ou console)
+
+    Returns:
+        Logger structlog configuré
     """
-    log_level = getattr(logging, level.upper(), logging.INFO)
-    
-    # Configuration de base
+    # Mapper les niveaux de log
+    log_levels = {
+        "debug": logging.DEBUG,
+        "info": logging.INFO,
+        "warning": logging.WARNING,
+        "error": logging.ERROR,
+    }
+
+    log_level = log_levels.get(level.lower(), logging.INFO)
+
+    # Configuration du logging standard Python
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
         level=log_level,
     )
-    
+
     # Processeurs communs
     shared_processors = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
         structlog.processors.TimeStamper(fmt="iso"),
+        structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.StackInfoRenderer(),
     ]
-    
-    # Choix du renderer selon le format
-    if log_format == "json":
+
+    # Processeurs selon le format
+    if format == "json":
+        # Format JSON pour production
         processors = shared_processors + [
             structlog.processors.format_exc_info,
-            structlog.processors.JSONRenderer()
+            structlog.processors.UnicodeDecoder(),
+            structlog.processors.JSONRenderer(),
         ]
     else:
+        # Format console pour développement
         processors = shared_processors + [
-            structlog.dev.ConsoleRenderer()
+            structlog.processors.format_exc_info,
+            structlog.dev.ConsoleRenderer(),
         ]
-    
-    # Configuration de structlog
+
+    # Configuration structlog
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.stdlib.BoundLogger,
@@ -55,30 +71,30 @@ def setup_logging(level: str = "info", log_format: str = "json") -> None:
         cache_logger_on_first_use=True,
     )
 
+    # Retourner le logger
+    logger = structlog.get_logger()
 
-def get_logger(name: str) -> Any:
+    logger.info(
+        "Logger configuré",
+        extra={
+            "level": level,
+            "format": format,
+        },
+    )
+
+    return logger
+
+
+def get_logger(name: str = None) -> structlog.BoundLogger:
     """
-    Récupère un logger structuré.
-    
+    Récupère un logger structlog.
+
     Args:
-        name: Nom du logger (généralement __name__)
-        
+        name: Nom du logger (optionnel)
+
     Returns:
         Logger structlog
     """
-    return structlog.get_logger(name)
-
-
-def log_context(**kwargs: Any) -> Dict[str, Any]:
-    """
-    Ajoute du contexte aux logs suivants.
-    
-    Args:
-        **kwargs: Paires clé-valeur à ajouter au contexte
-        
-    Returns:
-        Contexte ajouté
-    """
-    structlog.contextvars.clear_contextvars()
-    structlog.contextvars.bind_contextvars(**kwargs)
-    return kwargs
+    if name:
+        return structlog.get_logger(name)
+    return structlog.get_logger()

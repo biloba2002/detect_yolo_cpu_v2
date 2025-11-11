@@ -61,24 +61,93 @@ docker compose up -d
 ```
 detect_yolo_cpu_v2/
 ├── config/
-│   ├── config.yaml           # Configuration principale
-│   └── config.sample.yaml    # Template de configuration
+│   ├── config.yaml                 # Configuration principale
+│   └── config.sample.yaml          # Template pour utilisateurs
 ├── src/
-│   ├── main.py              # Point d'entrée
-│   ├── config_loader.py     # Chargement config
-│   ├── detector.py          # Moteur de détection
-│   ├── zone_manager.py      # Gestion des zones
-│   ├── file_watcher.py      # Surveillance fichiers
-│   ├── mqtt_publisher.py    # Publication MQTT
-│   ├── image_annotator.py   # Annotation d'images
-│   ├── message_builder.py   # Construction messages
-│   └── logger.py            # Configuration logs
-├── shared_in/               # Dossier images entrantes
-├── shared_out/              # Dossier images traitées
-├── docker-compose.yml
+│   ├── __init__.py
+│   ├── main.py                     # Point d'entrée principal
+│   ├── config_loader.py            # Chargement & validation config
+│   ├── detector.py                 # Engine YOLO + filtrage zones
+│   ├── zone_manager.py             # Gestion polygones Shapely
+│   ├── file_watcher.py             # Watchdog monitoring
+│   ├── mqtt_publisher.py           # Client MQTT + autodiscovery
+│   ├── image_annotator.py          # Génération images annotées
+│   ├── message_builder.py          # Construction messages texte
+│   └── logger.py                   # Configuration structlog
+├── tests/
+│   ├── __init__.py
+│   ├── test_zone_manager.py        # Tests polygones
+│   ├── test_detector.py            # Tests détection mock
+│   ├── test_image_annotator.py     # Tests annotations
+│   └── fixtures/
+│       ├── test_image.jpg          # Image de test
+│       └── test_config.yaml        # Config test
+├── shared_in/                      # Volume Docker (input)
+├── shared_out/                     # Volume Docker (output)
+├── .env.sample                     # Variables d'environnement template
+├── .dockerignore
+├── .gitignore
 ├── Dockerfile
-└── README.md
+├── docker-compose.yml
+├── pyproject.toml                  # Config uv + dépendances
+├── README.md
+├── CHANGELOG.md
+└── kanban.md
 ```
+
+### flux simplifié
+
+```
+┌─────────────────┐
+│  shared_in/     │  Images nommées: {camera}_{timestamp}.jpg
+│  (watchdog)     │  
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────┐
+│  Détection YOLO CPU                             │
+│  1. Identifier caméra depuis nom fichier        │
+│  2. Charger config caméra (zones, detect list)  │
+│  3. Détecter objets (bbox + score)              │
+│  4. Filtrer par zones (polygones)               │
+└────────┬────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────┐
+│  Génération outputs                             │
+│  • Compteurs (détections par type/zone)         │
+│  • Images annotées (zones, bbox)                │
+│  • Messages texte personnalisés                 │
+└────────┬────────────────────────────────────────┘
+         │
+         ├──────────────┬─────────────┬────────────┐
+         ▼              ▼             ▼            ▼
+    ┌─────────┐   ┌─────────┐  ┌──────────┐  ┌────────┐
+    │ MQTT    │   │ MQTT    │  │ shared_  │  │ HA     │
+    │ sensors │   │ notify  │  │ out/     │  │ autodis│
+    └─────────┘   └─────────┘  └──────────┘  └────────┘
+
+```
+
+### Stack technique finale
+
+Python : 3.11+ (slim-bookworm)
+Dépendances core :
+
+* ultralytics (YOLO11)
+* opencv-python-headless
+* shapely (zones)
+* watchdog (monitoring fichiers)
+* paho-mqtt
+* pydantic + pyyaml
+* structlog
+* pillow
+
+
+Gestionnaire : uv (ultra-rapide, lock file)
+Docker : Multi-stage, user non-root, healthcheck
+Volumes : shared_in, shared_out, config
+`
 
 ## 🔧 Configuration
 
@@ -134,7 +203,7 @@ sensor.ptz_detections_totales
 ...
 ```
 
-## 📊 Logs
+## 📊 BACKLogs
 
 Les logs sont structurés en JSON et disponibles via :
 
