@@ -1,0 +1,131 @@
+app:
+  name: detect_yolo_cpu_v2
+  version: 2.0.0
+
+directories:
+  input: /app/shared_in
+  output: /app/shared_out
+
+logging:
+  level: info  # debug | info | warning | error
+  format: json
+
+mqtt:
+  broker: 10.0.0.3
+  port: 1883
+  qos: 1
+  retain: false
+  username: ""  # Remplir dans .env
+  password: ""  # Remplir dans .env
+  topics:
+    sensor: "detect_yolo_cpu_v2/sensor/{camera}/{metric}"
+    notify: "detect_yolo_cpu_v2/notify/{camera}/{zone}"
+    image: "detect_yolo_cpu_v2/image/{camera}"
+
+homeassistant:
+  autodiscovery: true
+  discovery_prefix: "homeassistant"
+
+detection:
+  model: yolo11n.pt
+  confidence_threshold: 0.5
+
+cameras:
+  - name: reolink
+    detect:
+      - person
+      - cat
+      - dog
+      - car
+      - motorcycle
+      - truck
+      - bird
+      - bicycle
+    text_msg: true
+    audio_msg: true
+    show_object: true
+    entity_ha: true
+    zones:
+      - name: route
+        polygon:
+          - 0.002
+          - 0.433
+          - 0.593
+          - 0.428
+          - 0.995
+          - 0.588
+          - 0.996
+          - 0.097
+          - 0.8
+          - 0.005
+          - 0.513
+          - 0.003
+          - 0.0
+          - 0.001
+        show_zone: true
+        show_object: true
+        entity_ha: true
+        text_msg: true
+        audio_msg: true
+        msg_template: "{count_person} personne(s) et {count_car} voiture(s) détecté(es) sur la route"
+
+      - name: cour
+        polygon:
+          - 0.244
+          - 0.99
+          - 0.155
+          - 0.772
+          - 0.036
+          - 0.616
+          - 0.001
+          - 0.561
+          - 0.002
+          - 0.461
+          - 0.576
+          - 0.443
+          - 0.605
+          - 0.466
+          - 0.636
+          - 0.47
+          - 0.981
+          - 0.603
+          - 0.991
+          - 0.986
+        show_zone: true
+        show_object: true
+        entity_ha: true
+        text_msg: true
+        audio_msg: true
+        msg_template: "{count_person} personne(s) et {count_dog} chien(s) dans la cour"
+
+  - name: ptz
+    detect:
+      - person
+      - cat
+      - dog
+      - car
+      - motorcycle
+      - truck
+      - bird
+      - bicycle
+    text_msg: true
+    audio_msg: true
+    show_object: true
+    entity_ha: true
+    zones: []
+
+  - name: generique
+    detect:
+      - person
+      - cat
+      - dog
+      - car
+      - motorcycle
+      - truck
+      - bird
+      - bicycle
+    text_msg: true
+    audio_msg: false
+    show_object: true
+    entity_ha: true
+    zones: []
