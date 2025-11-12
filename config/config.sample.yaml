@@ -44,7 +44,8 @@ cameras:
     text_msg: true
     audio_msg: true
     show_object: true
-    entity_ha: true
+    entity_detect: true
+    entity_false_detect: true
     zones:
       - name: route
         polygon:
@@ -64,7 +65,7 @@ cameras:
           - 0.001
         show_zone: true
         show_object: true
-        entity_ha: true
+        entity_object: car
         text_msg: true
         audio_msg: true
         msg_template: ""
@@ -93,7 +94,7 @@ cameras:
           - 0.986
         show_zone: true
         show_object: true
-        entity_ha: true
+        entity_detect: true
         text_msg: true
         audio_msg: true
         msg_template: ""
@@ -111,7 +112,7 @@ cameras:
     text_msg: true
     audio_msg: true
     show_object: true
-    entity_ha: true
+    entity_detect: true
     zones: []
 
   - name: terrasse
@@ -127,7 +128,7 @@ cameras:
     text_msg: true
     audio_msg: true
     show_object: true
-    entity_ha: true
+    entity_detect: true
     zones: []
 
   - name: generique
@@ -143,5 +144,5 @@ cameras:
     text_msg: true
     audio_msg: false
     show_object: true
-    entity_ha: true
+    entity_detect: true
     zones: []
